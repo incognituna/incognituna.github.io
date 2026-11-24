@@ -2,7 +2,7 @@
 <html lang="pt-PT">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-918apCbfbFL0T7muXkvQHO9JimO801tOgFCVfF+rb7k=' blob: data:; style-src 'sha256-k8rf2FtnAzUpO1k6SLV5aF63UMIkxfaSZn1ds4AGDPc='; img-src 'self' data:; font-src data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-1FcbGickhvgQZcCUmKNfMBYwJwTq89BTX1ufa9VyerQ=' blob: data:; style-src 'sha256-cBQLrqhyY3ioZTGJvDir1IDq88IbaTleVBoz0FEe5D0='; img-src 'self' data:; font-src data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <link rel="manifest" href="manifest.webmanifest">
@@ -230,6 +230,22 @@ select:disabled { opacity: 0.45; }
 .desvio.ok { border-color: rgba(16, 185, 129, 0.6); }
 .desvio.ok .val { color: var(--verde); }
 
+/* Aviso de áudio parado (ex.: iPhone pausou o som) */
+.ativar {
+  display: block;
+  width: 100%;
+  margin-top: 9px;
+  padding: 12px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--ouro);
+  background: var(--ouro-suave);
+  color: var(--marfim);
+  font: 600 14px var(--sans);
+  line-height: 1.35;
+  cursor: pointer;
+}
+.ativar[hidden] { display: none; }
+
 /* VU meter */
 .vu-linha { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .vu {
@@ -456,6 +472,8 @@ body.palco .toggle { background: #000; }
           <span class="un">Hz</span>
         </div>
       </div>
+
+      <button type="button" class="ativar" id="btnAtivar" hidden></button>
 
       <div class="vu-linha" title="Nível do microfone">
         <span class="rot">Sinal</span>
@@ -1003,7 +1021,8 @@ const el = {
   lFreq: $('lFreq'), lCents: $('lCents'), lAlvo: $('lAlvo'), vu: $('vu'), vuDb: $('vuDb'),
   cordas: $('cordas'), a4Menos: $('a4Menos'), a4Mais: $('a4Mais'), a4Valor: $('a4Valor'),
   btnSom: $('btnSom'), btnPalco: $('btnPalco'), visor: $('visor'),
-  arranque: $('arranque'), btnStart: $('btnStart'), msg: $('arranqueMsg')
+  arranque: $('arranque'), btnStart: $('btnStart'), msg: $('arranqueMsg'),
+  btnAtivar: $('btnAtivar')
 };
 
 function currentTuning() {
@@ -1022,6 +1041,11 @@ function currentStrings() {
    --------------------------------------------------------------------- */
 let ctx = null, node = null, stream = null, sink = null;
 const IS_MI_BROWSER = /MiuiBrowser|XiaoMi\/|MiBrowser/i.test(navigator.userAgent);
+// iPhone/iPad (inclui iPad com "modo computador")
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ||
+  new URLSearchParams(location.search).has('ios');
+let audioStartedAt = 0;
 
 function ensureContext() {
   if (!ctx) {
@@ -1029,8 +1053,16 @@ function ensureContext() {
     // irrelevante num afinador (a janela de análise domina) e evita engasgos.
     ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
   }
-  if (ctx.state === 'suspended') ctx.resume();
+  if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {});
   return ctx;
+}
+
+/* Desliga tudo (microfone, grafo, contexto) para um arranque limpo */
+function stopAudio() {
+  try { if (stream) stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+  try { if (node && node.sp) node.sp.disconnect(); else if (node && node.disconnect) node.disconnect(); } catch (_) {}
+  try { if (ctx) ctx.close(); } catch (_) {}
+  stream = null; node = null; sink = null; ctx = null;
 }
 
 async function startAudio() {
@@ -1040,7 +1072,9 @@ async function startAudio() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error('Este navegador não dá acesso ao microfone.');
   }
-  ensureContext();
+  // No Android cria-se o contexto já (dentro do toque). No iPhone só depois de o microfone
+  // estar ativo: o Safari pode dar silêncio se o contexto existir antes da captura.
+  if (!IS_IOS) ensureContext();
 
   // Alguns browsers (ex.: navegador da Xiaomi com ficheiros locais) nunca mostram o pedido
   // de permissão e ficam pendurados: ao fim de 10 s desiste com uma explicação útil.
@@ -1061,6 +1095,7 @@ async function startAudio() {
        'Este navegador não autoriza o microfone em ficheiros locais: abre o afinador por um link https://.' :
        'Verifica as permissões de microfone do navegador.'))), 10000))
   ]);
+  ensureContext();
   const src = ctx.createMediaStreamSource(stream);
   // Ligação a um ganho 0 → destino: garante que o detetor é "puxado" pelo grafo em todos os browsers
   sink = ctx.createGain();
@@ -1095,7 +1130,16 @@ async function startAudio() {
 
   node.port.onmessage = onWorkletMessage;
   sendConfig();
-  if (ctx.state === 'suspended') await ctx.resume();
+  if (ctx.state !== 'running') { try { await ctx.resume(); } catch (_) {} }
+  audioStartedAt = performance.now();
+  state.lastMsgAt = 0;
+  state.silentSince = 0;
+}
+
+async function restartAudio() {
+  stopAudio();
+  clearReading();
+  await startAudio();
 }
 
 /* Plano B: se o browser recusar o AudioWorklet (ex.: página aberta como ficheiro local),
@@ -1109,13 +1153,17 @@ async function createFallbackDetector(src, code) {
     onmessage: null,
     postMessage(m) { if (proc && proc.port.onmessage) proc.port.onmessage({ data: m }); }
   };
+  // As mensagens do motor passam sempre pelo emissor atual (a classe só é carregada uma vez,
+  // por isso não pode guardar referências a um arranque anterior).
+  window.__incognitunaEmit = (m) => { if (port.onmessage) port.onmessage({ data: m }); };
   const Base = class {
-    constructor() { this.port = { onmessage: null, postMessage: (m) => { if (port.onmessage) port.onmessage({ data: m }); } }; }
+    constructor() { this.port = { onmessage: null, postMessage: (m) => window.__incognitunaEmit(m) }; }
   };
-  const register = (_, c) => { Proc = c; };
+  const register = (_, c) => { Proc = c; window.__incognitunaProc = c; };
+  if (window.__incognitunaProc) Proc = window.__incognitunaProc;
   // Sem eval: o motor entra como <script> (ficheiro do site ou blob do código embutido),
   // compatível com a Content-Security-Policy.
-  {
+  if (!Proc) {
     window.AudioWorkletProcessor = Base;
     window.registerProcessor = register;
     window.sampleRate = ctx.sampleRate;
@@ -1176,6 +1224,9 @@ const HOLD_MS = 1400;        // mantém a última leitura visível depois de a c
 function onWorkletMessage(e) {
   const m = e.data;
   state.db = m.db;
+  const tnow = performance.now();
+  state.lastMsgAt = tnow;
+  if (m.db < -100) { if (!state.silentSince) state.silentSince = tnow; } else state.silentSince = 0;
   if (m.type !== 'pitch') return;
   const now = performance.now();
   state.f = m.f; state.raw = m.raw; state.clarity = m.clarity;
@@ -1384,7 +1435,7 @@ function releaseWakeLock() { if (wakeLock) { wakeLock.release().catch(() => {});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (state.palco) requestWakeLock();
-    if (ctx && ctx.state === 'suspended') ctx.resume();
+    if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {});
   }
 });
 
@@ -1531,11 +1582,32 @@ function draw(now) {
   el.visor.classList.toggle('afinado', !!tuned);
 }
 
+/* Vigilância do áudio: se o microfone não estiver mesmo a chegar ao motor,
+   diz porquê no ecrã e oferece um botão para reativar (um toque resolve no iPhone). */
+function checkAudioHealth(now) {
+  if (!node || !audioStartedAt || now - audioStartedAt < 2500) { showAtivar(null); return; }
+  if (ctx && ctx.state !== 'running') {
+    showAtivar('O som está em pausa. Toca aqui para ativar o microfone.');
+  } else if (now - (state.lastMsgAt || audioStartedAt) > 2500) {
+    showAtivar('O microfone não está a chegar ao afinador. Toca aqui para reiniciar.');
+  } else if (state.silentSince && now - state.silentSince > 3000) {
+    showAtivar('O microfone está a enviar silêncio. Fecha apps que o estejam a usar (chamadas, gravador, WhatsApp) e toca aqui.');
+  } else {
+    showAtivar(null);
+  }
+}
+function showAtivar(msg) {
+  if (!el.btnAtivar) return;
+  if (msg) { el.btnAtivar.textContent = msg; el.btnAtivar.hidden = false; }
+  else el.btnAtivar.hidden = true;
+}
+
 /* Leituras digitais (atualizadas a ~15 Hz para serem legíveis) */
 let lastText = 0;
 function updateReadouts(now) {
   if (now - lastText < 66) return;
   lastText = now;
+  checkAudioHealth(now);
   const live = state.cents != null && now - state.lastPitchAt < HOLD_MS;
   // VU
   const pct = Math.max(0, Math.min(100, ((state.db + 70) / 70) * 100));
@@ -1614,6 +1686,25 @@ function init() {
     state.palco = !state.palco;
     savePrefs(); applyToggles();
   });
+
+  el.btnAtivar.addEventListener('click', async () => {
+    el.btnAtivar.disabled = true;
+    try {
+      if (ctx && ctx.state !== 'running' && ctx.state !== 'closed' &&
+          performance.now() - (state.lastMsgAt || 0) < 2500) {
+        await ctx.resume();
+      } else {
+        await restartAudio();
+      }
+    } catch (err) {
+      showAtivar((err && err.message) || 'Não foi possível reativar o microfone.');
+    }
+    el.btnAtivar.disabled = false;
+  });
+  // No iPhone, qualquer toque no ecrã volta a ligar o som se o sistema o tiver pausado
+  document.addEventListener('touchend', () => {
+    if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {});
+  }, { passive: true });
 
   el.btnStart.addEventListener('click', async () => {
     el.btnStart.disabled = true;

@@ -3,7 +3,7 @@
    • Restantes ficheiros: cópia guardada primeiro, atualizada em segundo plano.
    • A instalação ignora a cache HTTP do browser (cache: 'reload'), para nunca guardar
      uma versão antiga por engano. */
-const CACHE = 'incognituna-afinador-v6';
+const CACHE = 'incognituna-afinador-v7';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
