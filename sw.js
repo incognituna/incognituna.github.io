@@ -1,7 +1,7 @@
 /* Service worker do Afinador Oficial da INCOGNITUNA
    Estratégia stale-while-revalidate: arranca offline (bastidores sem rede)
    e atualiza em segundo plano quando há ligação. */
-const CACHE = 'incognituna-afinador-v4';
+const CACHE = 'incognituna-afinador-v5';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -2,7 +2,7 @@
 <html lang="pt-PT">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-I1H73AvKT/p749wS8T0Q284ygM5mHArM4i5kj9/A4+M=' blob: data:; style-src 'sha256-k8rf2FtnAzUpO1k6SLV5aF63UMIkxfaSZn1ds4AGDPc='; img-src 'self' data:; font-src data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-918apCbfbFL0T7muXkvQHO9JimO801tOgFCVfF+rb7k=' blob: data:; style-src 'sha256-k8rf2FtnAzUpO1k6SLV5aF63UMIkxfaSZn1ds4AGDPc='; img-src 'self' data:; font-src data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <link rel="manifest" href="manifest.webmanifest">
@@ -1136,6 +1136,30 @@ async function createFallbackDetector(src, code) {
   src.connect(sp);
   sp.connect(sink);
   return { port, fallback: true, sp };
+}
+
+function sendConfig() {
+  if (!node) return;
+  const inst = INSTRUMENTOS[state.inst];
+  let cfg;
+  if (inst.cromatico) {
+    cfg = { mode: 'chromatic', fmin: 30, fmax: 4400, lockFreq: null,
+            clarityMin: 0.90, k: 0.90, octaveGuard: false, notch50: false };
+  } else {
+    const fs = currentStrings().map((s) => s.freq);
+    cfg = {
+      mode: 'instrument',
+      fmin: Math.min(...fs) / 1.26,           // margem de ~4 meios-tons abaixo
+      fmax: Math.max(...fs) * 1.26,           // e acima (cordas muito desafinadas)
+      lockFreq: state.lock != null ? fs[state.lock] : null,
+      clarityMin: 0.92,
+      k: inst.dsp.k,
+      octaveGuard: inst.dsp.octaveGuard,
+      notch50: true
+    };
+  }
+  node.port.postMessage({ type: 'config', ...cfg });
+  clearReading();
 }
 
 /* ---------------------------------------------------------------------
